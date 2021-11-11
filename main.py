@@ -1,13 +1,13 @@
 #!/bin/env python3
 # -*- coding: utf-8 -*-
 # 导入内部模块
-from os                    import devnull, chdir, makedirs, remove
-from os.path               import exists, join, getsize
-from sys                   import maxsize
-from time                  import time
-from json                  import loads
-from hashlib               import md5
-from argparse              import ArgumentParser
+from os import devnull, chdir, makedirs, remove
+from os.path import exists, join, getsize
+from sys import maxsize
+from time import time, strftime, localtime
+from json import loads
+from hashlib import md5
+from argparse import ArgumentParser
 from multiprocessing.dummy import Pool
 
 # 导入外部模块
@@ -41,18 +41,18 @@ if missing:
 ''')
     exit()
 
-
 # 基本单位
 kb = 1024
 mb = 1024 * 1024
 gb = 1024 * 1024 * 1024
 tb = 1024 * 1024 * 1024 * 1024
 
+
 class Flags:
-    '''
+    """
     以下是一些调试以及实验性的参数
     除非是为了测试 否则这些参数不应改变
-    '''
+    """
     # 区块大小 数值越大占用内存越大
     CHUNK_SIZE = 32 * kb
     # 不检查 HTTPS 证书
@@ -63,6 +63,7 @@ class Flags:
     UI_PRINTER_VER_1 = False
     # 作者名字 我觉得应该没人要改这个...
     ARTHUR_NAME = 'cloudwindy'
+    # SECOND_ARTHUR_NAME = 'YoRHaAlter'
 
 
 # 导入本地模块
@@ -73,7 +74,7 @@ else:
 
 
 class Application:
-    '''主程序'''
+    """主程序"""
 
     def main(self):
         parser = ArgumentParser(description='Yande.re 爬虫')
@@ -101,27 +102,33 @@ class Application:
         ui.note('Yande.re %s工具' % ('校验' if args.verify else '下载'))
         conf = loads(args.conf.read())
         args.conf.close()
+
         # - 可选参数 thread_num 线程数量
         # 默认值: 1
         self.thread_num = conf.get('thread_num', 1)
+
         # - 必选参数 save_dir 保存路径
         self.save_dir = conf['save_dir']
+
         # - 可选参数 tags 主标签
         # 默认值: 不指定标签
         self.tags = conf.get('tags')
         if not self.tags:
             ui.warn('未指定标签 默认处理所有图片')
+
         # - 可选参数 except_tags 排除的标签
         # 默认值: 不排除标签
         if except_tags := conf.get('except_tags'):
             self.except_tags = '-' + except_tags.replace('-', '+-')
         else:
             ui.warn('未排除标签 不会自动过滤猎奇等类型图片')
+
         # - 必选参数 start 起始页码
         if start := conf.get('start'):
             self.start = start
         else:
             ui.fail('未指定起始页码("start")!')
+
         # - 可选参数 end 结束页码
         # 默认值: 处理直到最后一页
         # 特殊值: 为 -1 时下载到最后一页
@@ -135,6 +142,7 @@ class Application:
             ui.warn('程序将仅处理第 %d 页' % start)
         else:
             self.end = end
+
         # - 可选参数 proxy_addr 代理地址
         if conf.get('proxy') and (addr := conf.get('proxy_addr')):
             self.proxies = {
@@ -142,24 +150,45 @@ class Application:
                 'https': 'http://' + addr
             }
             ui.warn('已启用 HTTP(S) 代理: %s' % addr)
+
         # - 可选参数 log 日志路径
         # 默认值: 不记录日志
         self.logfile = logfile = conf.get('log')
+
         # - 可选参数 log_autopurge 自动清空日志
         # 默认值: 不清空日志
         if conf.get('log_autopurge') and exists(logfile):
             remove(logfile)
             ui.warn('已删除旧日志: ' + logfile)
+
+        # - 可选参数 artistList 画师列表
+        # 默认值: 未指定列表
+        self.artistList = conf.get('artistList')
+        if not self.artistList:
+            ui.warn('未指定列表 默认处理tags')
+
         # - 实验参数 Flags.NO_CHECK_CERTIFICATE
         if Flags.NO_CHECK_CERTIFICATE:
             ui.warn('已禁用 SSL 证书认证')
-        if args.verify:
-            self.verify_mode()
+
+        if self.artistList:
+            ui.warn('进入画师列表下载模式')
+            self.save_dir_old = self.save_dir
+            for artist in self.artistList:
+                self.tags = artist
+                ui.note('当前画师：' + self.tags)
+                self.download_mode()
         else:
-            self.download_mode()
+            if args.verify:
+                self.verify_mode()
+            else:
+                self.download_mode()
 
     def download_mode(self):
-        '''下载模式: 自动下载所有图片'''
+        """下载模式: 自动下载所有图片"""
+
+        self.save_dir = self.save_dir_old + self.tags + '/'
+
         ui = UIPrinter('主程序')
         pool = Pool(self.thread_num)
         if not exists(save_dir := self.save_dir):
@@ -169,7 +198,7 @@ class Application:
         for page in range(self.start, self.end):
             try:
                 if self.get_page(page, pool):
-                    break
+                    return True
             except KeyboardInterrupt:
                 print()
                 ui.note('用户已关闭程序 退出')
@@ -187,7 +216,7 @@ class Application:
         ui.note('下载工具已退出')
 
     def verify_mode(self):
-        '''校验模式: 验证图片完整性 不通过则删除'''
+        """校验模式: 验证图片完整性 不通过则删除"""
         main_ui = UIPrinter('主程序')
         if not exists(self.save_dir):
             main_ui.fail('请先下载再校验')
@@ -218,15 +247,20 @@ class Application:
         main_ui.note('校验工具已退出')
 
     def get_page(self, page, pool):
-        '''获取页面元数据'''
+        """获取页面元数据"""
         ui = UIPrinter(f'页面 {page}')
+
+        # print (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+        ui.note(strftime("%Y-%m-%d %H:%M:%S", localtime()))
+
         ui.wait('正在获取元数据')
         pic_list = self._get_pic_list(page)
         pic_list_len = len(pic_list)
         # 检测 图片数量
         if pic_list_len <= 0:
             ui.note('已到达最后一页 退出')
-            return
+            ui.wait('------------------------------')
+            return True
         ui.succ('已获取元数据')
         ui.wait('正在移除重复图片...')
         for pic in pic_list[:]:
@@ -247,10 +281,10 @@ class Application:
         ui.succ('下载完毕')
 
     def get_pic(self, pic):
-        '''
+        """
         下载单张图片
         由于 Yande.re 不支持, 断点续传功能已移除
-        '''
+        """
         log = self._get_logger('图片' + str(pic['id']))
         while True:
             try:
@@ -286,7 +320,7 @@ class Application:
                             else:
                                 break
                 t3 = time()
-                speed = _convert(pic['file_size'] / (t3-t2))
+                speed = _convert(pic['file_size'] / (t3 - t2))
                 log.info("下载完成 速度: %s/s", speed)
                 break
             except Exception:
@@ -302,7 +336,7 @@ class Application:
         self.tags = None
         self.except_tags = None
         self.uifile = None
-        self.autopurge = True
+        self.autopurge = False
         self.proxies = None
         self.thread_num = None
         self.save_dir = None
@@ -310,27 +344,27 @@ class Application:
         self.main()
 
     def _get_logger(self, name):
-        '''获取logger'''
+        """获取logger"""
         fmt = LogFormatter(
             fmt='[%(levelname)1.1s %(asctime)s] %(name)s: %(message)s')
         return setup_logger(name, logfile=devnull, formatter=fmt, disableStderrLogger=True)
 
     def _get_pic_list(self, page):
-        '''请求图片列表API'''
+        """请求图片列表API"""
         url = f'https://yande.re/post.json?limit=100&page={page}&tags={self.tags}'
         return loads(get(url, verify=not Flags.NO_CHECK_CERTIFICATE, proxies=self.proxies).text)
 
     def _path(self, pic):
-        '''根据图片元数据和保存位置生成对应路径'''
+        """根据图片元数据和保存位置生成对应路径"""
         return join(self.save_dir, '%d.%s' % (pic['id'], pic['file_ext']))
 
     def _get_size(self, pic):
-        '''获取文件大小 用于检查是否下载完了'''
+        """获取文件大小 用于检查是否下载完了"""
         return getsize(self._path(pic))
 
 
 def _convert(size):
-    '''转换为人类可读单位'''
+    """转换为人类可读单位"""
     # 参考: https://bui.csdn.net/mp624183768/article/details/84892999
     if size >= tb:
         return '%.1f TB' % (size / tb)
@@ -342,6 +376,7 @@ def _convert(size):
         return '%.1f KB' % (size / kb)
     else:
         return '%d B' % size
+
 
 # 无聊的全局变量们
 
