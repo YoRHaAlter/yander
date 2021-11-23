@@ -1,6 +1,7 @@
 #!/bin/env python3
 # -*- coding: utf-8 -*-
 # 导入内部模块
+import os
 from os import devnull, chdir, makedirs, remove
 from os.path import exists, join, getsize
 from sys import maxsize
@@ -161,33 +162,97 @@ class Application:
             remove(logfile)
             ui.warn('已删除旧日志: ' + logfile)
 
+        # - 可选参数 下载模式
+        # 默认值: 未指定
+        self.downloadMode = conf.get('downloadMode')
+        if not self.downloadMode:
+            ui.warn('未指定downloadMode')
+
+        # - 可选参数 characterList 角色列表
+        # 默认值: 未指定列表
+        self.characterList = conf.get('characterList')
+        if not self.characterList:
+            ui.warn('未指定characterList')
+
         # - 可选参数 artistList 画师列表
         # 默认值: 未指定列表
         self.artistList = conf.get('artistList')
         if not self.artistList:
-            ui.warn('未指定列表 默认处理tags')
+            ui.warn('未指定artistList')
+
+        # - 可选参数 tagList tag列表
+        # 默认值: 未指定列表
+        self.tagList = conf.get('tagList')
+        if not self.tagList:
+            ui.warn('未指定tagList')
+
+        # - 可选参数 ifSubTag 是否划分子文件夹
+        # 默认值: 划分子文件夹
+        self.if_sub_dir = conf.get('ifSubDir')
+        if self.if_sub_dir:
+            ui.warn('默认划分子文件夹')
 
         # - 实验参数 Flags.NO_CHECK_CERTIFICATE
         if Flags.NO_CHECK_CERTIFICATE:
             ui.warn('已禁用 SSL 证书认证')
 
-        if self.artistList:
-            ui.warn('进入画师列表下载模式')
-            self.save_dir_old = self.save_dir
-            for artist in self.artistList:
-                self.tags = artist
-                ui.note('当前画师：' + self.tags)
+        if self.downloadMode == 'tag':
+            ui.warn('进入tag列表下载模式')
+            self.checkArtist = True
+            self.checkCharacter = True
+            self.check_replica = True
+            self.save_dir_old = self.save_dir+'tags\\'
+            for now_tag in self.tagList:
+                self.tags = now_tag
+                ui.note('当前tag：' + self.tags)
                 self.download_mode()
-        else:
-            if args.verify:
-                self.verify_mode()
-            else:
+                ui.wait('------------------------------')
+
+        elif self.downloadMode == 'character':
+            ui.warn('进入character列表下载模式')
+            self.checkArtist = True
+            self.checkCharacter = False
+            self.check_replica = True
+            self.save_dir_old = self.save_dir+'character\\'
+            for now_tag in self.characterList:
+                self.tags = now_tag
+                ui.note('当前character：' + self.tags)
                 self.download_mode()
+                ui.wait('------------------------------')
+
+        elif self.downloadMode == 'artist':
+            ui.warn('进入artist列表下载模式')
+            self.checkArtist = False
+            self.checkCharacter = False
+            self.check_replica = False
+            self.save_dir_old = self.save_dir+'artist\\'
+            for now_tag in self.artistList:
+                self.tags = now_tag
+                ui.note('当前artist：' + self.tags)
+                self.download_mode()
+                ui.wait('------------------------------')
+
+        # if self.tagList:
+        #     ui.warn('进入tag列表下载模式')
+        #     self.save_dir_old = self.save_dir
+        #     for now_tag in self.tagList:
+        #         self.tags = now_tag
+        #         ui.note('当前tag：' + self.tags)
+        #         self.download_mode()
+        #         ui.wait('------------------------------')
+        # else:
+        #     if args.verify:
+        #         self.verify_mode()
+        #     else:
+        #         self.download_mode()
 
     def download_mode(self):
         """下载模式: 自动下载所有图片"""
 
-        self.save_dir = self.save_dir_old + self.tags + '/'
+        if self.if_sub_dir:
+            self.save_dir = self.save_dir_old + self.tags + '\\'
+        else:
+            self.save_dir = self.save_dir_old + 'noTags' + '\\'
 
         ui = UIPrinter('主程序')
         pool = Pool(self.thread_num)
@@ -205,6 +270,9 @@ class Application:
                 break
             except Exception:
                 ui.exception('发生了错误:')
+                pass
+            # continue
+            # return True
         pool.close()
         ui.note('正在等待任务结束')
         try:
@@ -259,15 +327,26 @@ class Application:
         # 检测 图片数量
         if pic_list_len <= 0:
             ui.note('已到达最后一页 退出')
-            ui.wait('------------------------------')
+
             return True
         ui.succ('已获取元数据')
         ui.wait('正在移除重复图片...')
         for pic in pic_list[:]:
             # 如果图片已有大小等于元数据 移出下载列表
+
+            if self._remove_replica(pic):
+                pic_list.remove(pic)
+                continue
+
             if exists(self._path(pic)):
                 if self._get_size(pic) == pic['file_size']:
                     pic_list.remove(pic)
+                    continue
+
+            if self.check_replica:
+                if self._path_new(pic):
+                    pic_list.remove(pic)
+
         # 别移没了
         if pic_list_len <= 0:
             ui.no('已下载完毕 跳过')
@@ -341,6 +420,7 @@ class Application:
         self.thread_num = None
         self.save_dir = None
         self.force_http = False
+        self.if_sub_dir = True
         self.main()
 
     def _get_logger(self, name):
@@ -351,8 +431,14 @@ class Application:
 
     def _get_pic_list(self, page):
         """请求图片列表API"""
-        url = f'https://yande.re/post.json?limit=100&page={page}&tags={self.tags}'
-        return loads(get(url, verify=not Flags.NO_CHECK_CERTIFICATE, proxies=self.proxies).text)
+        while True:
+            try:
+                tmp_tag=self.tags+'+order:score'
+                url = f'https://yande.re/post.json?limit=100&page={page}&tags={tmp_tag}'
+                return loads(get(url, verify=not Flags.NO_CHECK_CERTIFICATE, proxies=self.proxies).text)
+            except Exception:
+                pass
+            continue
 
     def _path(self, pic):
         """根据图片元数据和保存位置生成对应路径"""
@@ -362,6 +448,37 @@ class Application:
         """获取文件大小 用于检查是否下载完了"""
         return getsize(self._path(pic))
 
+    def _path_new(self, pic):
+        """
+        遍历目录 查找是否已下载
+        """
+        save = os.path.abspath(os.path.dirname(self.save_dir_old))
+        fs_save = os.walk(save)
+        for path, dir_list, file_list in fs_save:
+            # for file_name in file_list:
+                existed_file = join(path, '%d.%s' % (pic['id'], pic['file_ext']))
+                # print(existed_file)
+                if exists(existed_file):
+                    if getsize(existed_file) == pic['file_size']:
+                        return True
+        return False
+
+    def _remove_replica(self, pic):
+        """
+        移除重复作者、角色
+        """
+        tags = pic['tags'].split()
+        for t in tags:
+            if self.checkArtist:
+                for artist in self.artistList:
+                    if t == artist:
+                        return True
+
+            if self.checkCharacter:
+                for character in self.characterList:
+                    if t == character:
+                        return True
+        return False
 
 def _convert(size):
     """转换为人类可读单位"""
